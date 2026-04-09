@@ -77,9 +77,23 @@ function Show-Toast {
 $result = Test-AnthropicFakeIpFilter
 
 if ($result.Pass) {
-    # All good: save last-good snapshot and log
+    # All good in file: save last-good snapshot
     Save-LastGoodDnsConfig | Out-Null
-    Write-AgentLog "pass" "fake-ip-filter OK — all anthropic entries present"
+
+    # Stale-patch check: entries present in file but mihomo may not have loaded them yet
+    if (Get-Command -Name Test-MihomoLoadedCurrentConfig -ErrorAction SilentlyContinue) {
+        $loadCheck = Test-MihomoLoadedCurrentConfig
+        if (-not $loadCheck.Loaded) {
+            Write-AgentLog "warn" "fake-ip-filter OK in file but stale — mihomo started $($loadCheck.MihomoStart), dns patched $($loadCheck.FileMtime). Restart Clash Verge required."
+            Write-CronLog  "warn" "stale-patch: dns_config.yaml patched $($loadCheck.FileMtime) but mihomo started $($loadCheck.MihomoStart). Restart Clash Verge to apply."
+            Show-Toast `
+                "Claude Toolkit: Restart Required" `
+                "dns_config.yaml was updated after Clash Verge started.`nRestart Clash Verge to activate AI provider fake-IP protection."
+            exit 0
+        }
+    }
+
+    Write-AgentLog "pass" "fake-ip-filter OK — all 7 entries active in running mihomo"
     Write-CronLog  "pass" "fake-ip-filter OK: claude.ai, +.claude.ai, api.anthropic.com, +.anthropic.com, openai.com, +.openai.com, api.openai.com"
     exit 0
 }

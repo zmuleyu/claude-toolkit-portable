@@ -1,5 +1,42 @@
 # Changelog
 
+## v7.2 Portable (2026-04-09) — stale-patch detection
+
+**根因修复：dns_config.yaml 修补后 Clash Verge 未重启导致条目未生效。**
+
+### Root cause context
+TCT v7.1 将 OpenAI 端点加入 fake-ip-filter，但 verge-mihomo 进程在文件修补前已启动
+（mihomo 2026-04-08 00:53 vs 修补 2026-04-09 22:28），导致 Codex SSE 连接仍触发 fake-IP 截断。
+Mode 4 / Verify-DnsFilter.ps1 / Mode 1 只检查文件内容，对此"文件正确但未加载"的状态报告 PASS，
+产生误报，掩盖了真正需要重启的问题。
+
+### New: modules/clash-fake-ip-fix.ps1
+- 新增 `Test-MihomoLoadedCurrentConfig` 函数
+  - 用 WMI 读取 verge-mihomo.exe 启动时间（PS 5.1 兼容）
+  - 返回 `Loaded=$false` 当 dns_config.yaml 修改时间晚于 mihomo 启动时间（stale patch）
+  - 返回结果含 `FileMtime`、`MihomoStart`、`Reason` 字段
+
+### Enhanced: modules/mode-network.ps1 (Mode 4)
+- Section [2/11]：`filterCheck.Pass` 后追加 stale-patch 子检查
+  - stale 时报 WARN，显示 mihomo 启动时间 vs dns 修改时间
+- ACTION：新增 stale 分支（与 missing-entry 分支互斥）
+  - stale 时直接提示重启，不再尝试 patch（文件本身正确）
+  - 支持 `$script:AutoFixEnabled` 自动重启
+
+### Enhanced: Verify-DnsFilter.ps1
+- Pass 分支末追加 stale-patch 检测
+- stale 时：写 warn 日志 + 发送 Toast "Restart Required" + exit 0
+- pass + current：日志改为 "all 7 entries active in running mihomo"
+
+### Enhanced: modules/mode-health.ps1 (Mode 1)
+- [11/12] Fake-IP Filter 子检查：Pass 后追加 stale 检测
+- stale 时报 WARN，提示运行 `-Mode network` 进行引导修复
+
+### Updated: constants.ps1 + Claude-Toolkit.ps1
+- `$SCRIPT_VERSION` 7.1 → 7.2
+
+---
+
 ## v7.1 Portable (2026-04-09) — unified management update
 
 **扩展 AI provider fake-IP 检测覆盖范围：Anthropic → Anthropic + OpenAI。**

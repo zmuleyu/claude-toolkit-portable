@@ -450,8 +450,21 @@ function Invoke-HealthCheck {
     if (Get-Command -Name Test-AnthropicFakeIpFilter -ErrorAction SilentlyContinue) {
         $healthFakeIp = Test-AnthropicFakeIpFilter
         if ($healthFakeIp.Pass) {
-            Write-Status "OK" "dns_config.yaml fake-ip-filter: all 7 AI provider entries present"
-            $results += @{ Name = "Fake-IP Filter"; Status = "OK"; Detail = "Anthropic + OpenAI excluded from fake-IP" }
+            # Stale-patch check: entries present but mihomo may not have loaded them
+            $healthStale = $false
+            if (Get-Command -Name Test-MihomoLoadedCurrentConfig -ErrorAction SilentlyContinue) {
+                $healthLoadCheck = Test-MihomoLoadedCurrentConfig
+                if (-not $healthLoadCheck.Loaded) {
+                    $healthStale = $true
+                    Write-Status "WARN" "dns_config.yaml has all 7 entries but mihomo NOT reloaded (stale patch)"
+                    Write-Status "INFO" "  Restart Clash Verge to activate — run -Mode network for guided fix."
+                    $results += @{ Name = "Fake-IP Filter"; Status = "WARN"; Detail = $healthLoadCheck.Reason }
+                }
+            }
+            if (-not $healthStale) {
+                Write-Status "OK" "dns_config.yaml fake-ip-filter: all 7 AI provider entries present"
+                $results += @{ Name = "Fake-IP Filter"; Status = "OK"; Detail = "Anthropic + OpenAI excluded from fake-IP" }
+            }
         } else {
             Write-Status "WARN" "dns_config.yaml fake-ip-filter missing: $($healthFakeIp.Missing -join ', ')"
             Write-Status "INFO" "Run -Mode network to auto-patch, or run Run-Auth-Recovery.ps1"

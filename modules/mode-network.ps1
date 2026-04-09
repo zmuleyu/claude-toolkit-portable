@@ -356,12 +356,28 @@ function Invoke-NetworkDiagnostics {
     # Source-of-truth audit: Anthropic + OpenAI must be in dns_config.yaml fake-ip-filter.
     # Both use long-lived SSE streams that break under fake-ip (error decoding response body).
     # Requires modules\clash-fake-ip-fix.ps1 (loaded as a required module).
+    $script:FakeIpFilterStale = $false
     if (Get-Command -Name Test-AnthropicFakeIpFilter -ErrorAction SilentlyContinue) {
         $filterCheck = Test-AnthropicFakeIpFilter
         $script:FakeIpFilterCheck = $filterCheck
         if ($filterCheck.Pass) {
             Write-Status "OK" "dns_config.yaml fake-ip-filter: all 7 AI provider entries present"
-            Add-NetResult "AI Provider Fake-IP Filter" "PASS" "Anthropic (4) + OpenAI (3) all excluded from fake-IP pool"
+            # Stale-patch check: entries present in file but mihomo may not have loaded them yet
+            if (Get-Command -Name Test-MihomoLoadedCurrentConfig -ErrorAction SilentlyContinue) {
+                $script:MihomoLoadCheck = Test-MihomoLoadedCurrentConfig
+                if (-not $script:MihomoLoadCheck.Loaded) {
+                    $script:FakeIpFilterStale = $true
+                    Write-Status "WARN" "dns_config.yaml patched AFTER mihomo started — entries NOT yet active"
+                    Write-Status "INFO" "  mihomo start : $($script:MihomoLoadCheck.MihomoStart)"
+                    Write-Status "INFO" "  dns_config   : $($script:MihomoLoadCheck.FileMtime)"
+                    Write-Status "INFO" "  See ACTION section to restart Clash Verge and apply."
+                    Add-NetResult "AI Provider Fake-IP Filter" "WARN" $script:MihomoLoadCheck.Reason
+                } else {
+                    Add-NetResult "AI Provider Fake-IP Filter" "PASS" "Anthropic (4) + OpenAI (3) all excluded from fake-IP pool"
+                }
+            } else {
+                Add-NetResult "AI Provider Fake-IP Filter" "PASS" "Anthropic (4) + OpenAI (3) all excluded from fake-IP pool"
+            }
         } else {
             Write-Status "WARN" "dns_config.yaml fake-ip-filter missing: $($filterCheck.Missing -join ', ')"
             Write-Status "INFO" "See ACTION section below to auto-patch, or run Run-Auth-Recovery.ps1"
@@ -666,7 +682,17 @@ function Invoke-NetworkDiagnostics {
     } elseif ($script:NetContext.HasSecondaryTunnel -or $script:NetContext.HasIpv6RouteConflict) {
         Write-Status "INFO" "Audit route priority between Clash TUN and Tailscale/WireGuard."
     }
-    if (@($script:NetResults | Where-Object { $_.Check -eq "AI Provider Fake-IP Filter" -and $_.Status -eq "WARN" }).Count -gt 0) {
+    # Stale-patch case: entries present in file but mihomo hasn't reloaded — restart only, no patch needed
+    if ($script:FakeIpFilterStale -and (Get-Command -Name Restart-ClashVerge -ErrorAction SilentlyContinue)) {
+        Write-Status "INFO" "dns_config.yaml is correct but Clash Verge has NOT loaded the latest entries."
+        Write-Status "INFO" "  Anthropic + OpenAI fake-IP protection will NOT work until Clash Verge is restarted."
+        if ($script:AutoFixEnabled -or (Confirm-Action "Restart Clash Verge now to activate existing patch?")) {
+            Restart-ClashVerge | Out-Null
+            Write-Status "OK" "Clash Verge restarted. Fake-IP entries for Anthropic + OpenAI are now active."
+        } else {
+            Write-Status "WARN" "Skipped. Codex/Claude SSE disconnections will continue until Clash Verge is restarted."
+        }
+    } elseif (@($script:NetResults | Where-Object { $_.Check -eq "AI Provider Fake-IP Filter" -and $_.Status -eq "WARN" }).Count -gt 0) {
         Write-Status "INFO" "Patch dns_config.yaml to exclude Anthropic + OpenAI domains from Clash fake-IP pool."
         if (Get-Command -Name Add-AnthropicFakeIpFilter -ErrorAction SilentlyContinue) {
             $patched = $false

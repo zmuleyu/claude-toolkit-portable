@@ -1,4 +1,4 @@
-﻿# Claude-Toolkit.ps1  v7.1 Portable
+﻿# Claude-Toolkit.ps1  v7.2 Portable
 # Claude Code Diagnostic & Repair Toolkit for Windows
 # Run as: Right-click -> "Run with PowerShell"
 # Or: powershell -ExecutionPolicy Bypass -File Claude-Toolkit.ps1 [-Mode health|auth|cache|network|settings|lan|recovery|full] [-ExpectedAccountUuid <uuid>] [-ExpectedEmail <email>] [-ExpectedOrgUuid <uuid>]

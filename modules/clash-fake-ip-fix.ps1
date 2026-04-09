@@ -14,6 +14,7 @@
 #   Get-DnsConfigPath
 #   Get-AnthropicFakeIpFilterRequired
 #   Test-AnthropicFakeIpFilter           -> $true if all required entries present
+#   Test-MihomoLoadedCurrentConfig       -> $false if dns_config.yaml modified after mihomo started (stale patch)
 #   Add-AnthropicFakeIpFilter            -> idempotent patch with timestamped backup
 #   Save-LastGoodDnsConfig               -> snapshot to backups/dns_config.yaml.last-good
 #   Restore-LastGoodDnsConfig            -> restore from snapshot if drift detected
@@ -91,6 +92,44 @@ function Test-AnthropicFakeIpFilter {
         Missing = $missing
         Items   = $items
     }
+}
+
+function Test-MihomoLoadedCurrentConfig {
+    # Returns [pscustomobject]@{ Loaded; FileMtime; MihomoStart; Reason }
+    # Loaded=$false means dns_config.yaml was modified AFTER verge-mihomo started —
+    # the entries are in the file but mihomo has NOT reloaded them yet (stale patch).
+    # Uses WMI for process start time (PS 5.1 compatible; avoids [datetime] subtraction issues).
+    param([string]$DnsConfigPath = (Get-DnsConfigPath))
+
+    $r = [pscustomobject]@{
+        Loaded      = $true
+        FileMtime   = $null
+        MihomoStart = $null
+        Reason      = ""
+    }
+
+    if (-not (Test-Path $DnsConfigPath)) {
+        $r.Reason = "dns_config.yaml not found — cannot determine load state"
+        return $r
+    }
+
+    $r.FileMtime = (Get-Item $DnsConfigPath).LastWriteTime
+
+    $wmi = Get-WmiObject Win32_Process -Filter "Name='verge-mihomo.exe'" -ErrorAction SilentlyContinue
+    if (-not $wmi) {
+        $r.Reason = "verge-mihomo not running"
+        return $r  # Process not running; not a stale-patch condition
+    }
+
+    $r.MihomoStart = [Management.ManagementDateTimeConverter]::ToDateTime($wmi.CreationDate)
+
+    if ($r.FileMtime -gt $r.MihomoStart) {
+        $r.Loaded = $false
+        $r.Reason = "STALE: dns_config.yaml modified $($r.FileMtime) but mihomo started $($r.MihomoStart) — restart Clash Verge to apply"
+    } else {
+        $r.Reason = "Current: mihomo ($($r.MihomoStart)) started after dns_config.yaml ($($r.FileMtime))"
+    }
+    return $r
 }
 
 function Add-AnthropicFakeIpFilter {
