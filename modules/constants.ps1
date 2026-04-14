@@ -1,7 +1,7 @@
 ﻿# constants.ps1 — Centralized path constants and configuration
 # Part of Claude Code Diagnostic & Repair Toolkit v4.0
 
-$SCRIPT_VERSION = "7.3"
+$SCRIPT_VERSION = "7.4"
 $SCRIPT_EDITION = "Portable"
 
 # ── Core Claude paths ──

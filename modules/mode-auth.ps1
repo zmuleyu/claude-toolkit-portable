@@ -748,6 +748,171 @@ function Invoke-PostLoginIdentityCheck {
 # ── Invoke-AuthReset: Main entry for Mode 2 ─────────────────
 # ══════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════
+# ── Invoke-AuthRelogin: Mode 2L — Lightweight relogin ────────
+# ══════════════════════════════════════════════════════════════
+# 仅做三步：logout → 弹浏览器 → 验证。不动 settings/env/VS Code 状态。
+# 适用场景：账号 token 过期、想切换到同一 configDir 下的另一个账号。
+# 对比 Mode 2 (Invoke-AuthReset)：Mode 2 是"重置全家桶"，本模式是"温柔重登"。
+
+function Invoke-AuthRelogin {
+    [CmdletBinding()]
+    param(
+        [switch]$SkipLogout,           # 已手动 logout，跳过 Step 1
+        [int]$LoginTimeoutSeconds = 240
+    )
+
+    $script:AuthResetStartUtc = [DateTime]::UtcNow
+    $script:LastLoginStateChangeUtc = $null
+
+    Write-Section "Claude Auth Relogin (轻量三步)" "[Mode 2L]"
+    Show-ExpectedAccountHints
+
+    # ── 守卫：在 VS Code 进程树内运行会被 logout 自杀 ──────────
+    $hostCtx = Get-HostedVscodeContext
+    if ($hostCtx.IsHostedInVscode) {
+        Write-Status "WARN" "当前运行在 VS Code / Codex 进程树内"
+        Write-Status "INFO" "请在独立的 PowerShell 窗口中运行 Mode 2L，避免 logout 自杀当前会话"
+        Write-Status "INFO" "命令: powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Split-Path -Parent $PSScriptRoot)\Claude-Toolkit.ps1`" -Mode relogin"
+        return
+    }
+
+    # ── Step 1/3: 手动退出 ──────────────────────────────────────
+    Write-Section "退出当前 Claude 登录..." "[步骤 1/3]"
+
+    if ($SkipLogout) {
+        Write-Status "SKIP" "用户指定 -SkipLogout，跳过 logout"
+    } else {
+        $claudeExe = Get-Command claude -ErrorAction SilentlyContinue
+        if (-not $claudeExe) {
+            Write-Status "ERROR" "claude 不在 PATH，无法 logout"
+            Write-Status "INFO" "请先安装: npm install -g @anthropic-ai/claude-code"
+            return
+        }
+
+        # 备份当前凭据快照（便于回滚）
+        Export-AuthBaseline -Reason "relogin-pre-logout" | Out-Null
+
+        try {
+            $proc = Start-Process -FilePath $claudeExe.Source `
+                -ArgumentList "logout" `
+                -NoNewWindow -PassThru -Wait `
+                -RedirectStandardOutput "$env:TEMP\claude_relogin_logout.txt" `
+                -RedirectStandardError  "$env:TEMP\claude_relogin_logout_err.txt"
+            Write-Status "OK" "claude logout 完成 (exit $($proc.ExitCode))"
+        } catch {
+            Write-Status "ERROR" "claude logout 失败: $_"
+            return
+        }
+
+        # 显式确认凭据已清（logout 不一定删文件）
+        if (Test-Path $CREDENTIALS_FILE) {
+            Write-Status "WARN" "logout 后 $CREDENTIALS_FILE 仍存在，主动清除"
+            Backup-Path $CREDENTIALS_FILE "relogin-cred-residual" | Out-Null
+            Remove-Item $CREDENTIALS_FILE -Force
+        } else {
+            Write-Status "OK" "凭据文件已清除"
+        }
+
+        Write-Status "OK" "Step 1/3 完成 — 凭据已清空，准备弹浏览器登录"
+    }
+
+    # ── Step 2/3: 弹浏览器 OAuth 登录 ──────────────────────────
+    Write-Section "弹出浏览器进行 OAuth 登录..." "[步骤 2/3]"
+
+    $readiness = Get-AuthNetworkReadiness
+    Show-AuthReadinessReport -Readiness $readiness
+
+    if (-not $readiness.Ready) {
+        Write-Status "ERROR" "网络环境未就绪 ($($readiness.Status))，登录大概率会 15s timeout — 已中止"
+        switch ($readiness.Status) {
+            "dns_fake_ip_active" {
+                Write-Status "INFO" "Clash TUN/Fake-IP 仍活跃，请先用 Mode 4 修复，再重跑 Mode 2L"
+            }
+            "proxy_residual" {
+                Write-Status "INFO" "代理残留，请先用 Mode 7 清理，再重跑 Mode 2L"
+            }
+            default {
+                Write-Status "INFO" "请先确认网络直连 claude.ai / api.anthropic.com 后再登录"
+            }
+        }
+        return
+    }
+
+    # 写临时登录脚本（新 PS 窗口执行，避免当前窗口 TTY 被占用）
+    $tmpLogin = "$env:TEMP\claude_relogin_$([guid]::NewGuid().ToString('N')).ps1"
+    $loginScript = @'
+Write-Host ""
+Write-Host "======================================" -ForegroundColor Cyan
+Write-Host "  Claude Auth Relogin — 登录窗口" -ForegroundColor Cyan
+Write-Host "======================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "浏览器即将打开，请完成 OAuth 登录。" -ForegroundColor Yellow
+Write-Host "务必选择与目标账号一致的邮箱与组织。" -ForegroundColor Yellow
+Write-Host ""
+claude login
+Write-Host ""
+Write-Host "登录命令已退出，可以关闭此窗口。" -ForegroundColor Green
+Read-Host "按 Enter 关闭"
+'@
+    $loginScript | Set-Content $tmpLogin -Encoding UTF8
+
+    if (-not (Confirm-Action "立即弹出登录窗口?")) {
+        Write-Status "SKIP" "用户取消。手动运行:"
+        Write-Status "INFO" "powershell -NoProfile -ExecutionPolicy Bypass -File `"$tmpLogin`""
+        return
+    }
+
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$tmpLogin`""
+    Write-Status "OK" "登录窗口已启动，开始轮询 CLI 凭据变化 (超时 ${LoginTimeoutSeconds}s)..."
+
+    $loginResult = Wait-ForClaudeLoginCompletion -TimeoutSeconds $LoginTimeoutSeconds -PollIntervalSeconds 5
+
+    if (-not $loginResult.Success) {
+        Write-Status "ERROR" "在 ${LoginTimeoutSeconds}s 内未检测到 CLI 登录完成"
+        $postReadiness = Get-AuthNetworkReadiness
+        switch ($postReadiness.Status) {
+            "dns_fake_ip_active" {
+                Write-Status "INFO" "Fake-IP 仍活跃，OAuth callback 被截 — 这是 15s timeout 的高概率根因"
+            }
+            "proxy_residual" {
+                Write-Status "INFO" "代理残留仍在，建议用 Mode 7 彻底清理后重试"
+            }
+            default {
+                Write-Status "INFO" "若浏览器授权已完成但 CLI 无变化，请继续用 Mode 4/7 排查网络"
+            }
+        }
+        return
+    }
+
+    $script:LastLoginStateChangeUtc = $loginResult.LastStateChanged
+    Write-Status "OK" "CLI 已写入新凭据"
+    if ($loginResult.AccountInfo) {
+        Write-Status "INFO" "实际 email: $($loginResult.AccountInfo.Email)"
+        Write-Status "INFO" "实际 accountUuid: $($loginResult.AccountInfo.AccountUuid)"
+        Write-Status "INFO" "实际 organizationUuid: $($loginResult.AccountInfo.OrganizationUuid)"
+    }
+
+    Write-Status "OK" "Step 2/3 完成 — 浏览器 OAuth 已完成，CLI 凭据已更新"
+
+    # ── Step 3/3: 登录验证（身份 uuid + 真实能力双校验）──────
+    Write-Section "登录后验证..." "[步骤 3/3]"
+
+    $identityStatus = Invoke-PostLoginIdentityCheck   # uuid 比对
+    Invoke-PostLoginCapabilityCheck                   # 真实推理 probe
+
+    Write-Host ""
+    if ($identityStatus -eq "account_mismatch") {
+        Write-Status "ERROR" "Relogin FAILED — account_mismatch（浏览器选错了账号）"
+        Write-Status "INFO" "请重新运行 Mode 2L，在浏览器里确认选择正确的邮箱与组织"
+    } elseif ($identityStatus -eq "identity_not_verified") {
+        Write-Status "WARN" "Relogin partial — 已登录，但未提供 -ExpectedAccountUuid，无法做严格身份比对"
+        Write-Status "INFO" "如需严格校验，加参数: -ExpectedAccountUuid <uuid> -ExpectedEmail <email>"
+    } else {
+        Write-Status "OK" "Step 3/3 完成 — Relogin SUCCESS: 身份 + 能力双校验通过"
+    }
+}
+
 function Invoke-AuthReset {
     $script:AuthResetStartUtc = [DateTime]::UtcNow
     $script:LastLoginStateChangeUtc = $null

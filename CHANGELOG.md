@@ -1,5 +1,27 @@
 # Changelog
 
+## v7.4 Portable (2026-04-14) — Mode 2L 轻量认证重登
+
+**核心改进：新增 `Invoke-AuthRelogin`（Mode 2L），专注"logout → 弹浏览器 → 双层验证"三步闭环，不触碰 settings/env/VS Code 状态。**
+
+### New: Mode 2L — 认证重登 (modules/mode-auth.ps1)
+- 三步流程：Step 1 `claude logout` → Step 2 弹独立 PS 窗口运行 `claude login` → Step 3 身份 uuid + 能力探针双校验
+- 复用现有所有 helper：`Wait-ForClaudeLoginCompletion` / `Invoke-PostLoginIdentityCheck` / `Invoke-PostLoginCapabilityCheck` / `Export-AuthBaseline`
+- 网络就绪检测（`Get-AuthNetworkReadiness`）：fake-ip / 代理残留未就绪时直接 abort，不污染状态
+- VS Code 进程树守卫：检测到在 VS Code 内运行时拒绝执行并打印外部 PS 运行命令
+- 失败三态输出：`account_mismatch` / `identity_not_verified` / `Relogin SUCCESS`
+- 支持 `-SkipLogout`（已手动 logout 时跳过 Step 1）和 `-LoginTimeoutSeconds`（默认 240s）
+- 支持 `-ExpectedAccountUuid` / `-ExpectedEmail` 严格账号校验（来自 Claude-Toolkit.ps1 传参）
+
+### Modified: Claude-Toolkit.ps1
+- ValidateSet 追加 `relogin`
+- modeMap 追加 `relogin` → `Invoke-AuthRelogin`
+- 菜单追加 `[2L] 认证重登 退出+登录+验证 (不动 settings/env)` 项
+- menuMap 追加 `2l` → `relogin`
+- 命令行: `.\Claude-Toolkit.ps1 -Mode relogin [-ExpectedAccountUuid <uuid>] [-ExpectedEmail <email>]`
+
+---
+
 ## v7.3 Portable (2026-04-14) — GitHub 自分发 + 跨机诊断 + 账号查看
 
 **核心改进：工具从单机脚本升级为可自助分发的诊断平台，支持远程机器一键安装和 A↔B 通信诊断。**

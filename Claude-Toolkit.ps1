@@ -21,7 +21,7 @@
 # Optional: Python 3.x (enables better JSON handling)
 
 param(
-    [ValidateSet("menu","health","auth","cache","network","settings","lan","recovery","peer-check","full")]
+    [ValidateSet("menu","health","auth","relogin","cache","network","settings","lan","recovery","peer-check","full")]
     [string]$Mode = "menu",
     [switch]$AutoFix,            # Auto-repair discovered issues (network mode)
     [switch]$ShowCurrentAccount, # Read-only: print current logged-in Claude account
@@ -140,6 +140,7 @@ function Show-MainMenu {
     $modes = @(
         @{ Key="1"; Label="健康检查"; Desc="只读诊断，不修改文件";            Mod="mode-health.ps1" },
         @{ Key="2"; Label="认证重置"; Desc="清除OAuth令牌，重新登录";         Mod="mode-auth.ps1" },
+        @{ Key="2L"; Label="认证重登"; Desc="退出+登录+验证 (不动 settings/env)"; Mod="mode-auth.ps1" },
         @{ Key="3"; Label="缓存清理"; Desc="释放磁盘空间";                   Mod="mode-cache.ps1" },
         @{ Key="4"; Label="网络诊断"; Desc="DNS/HTTPS/代理/端口一致性";      Mod="mode-network.ps1" },
         @{ Key="5"; Label="设置重置"; Desc="恢复安全默认配置";               Mod="mode-settings.ps1" },
@@ -171,6 +172,7 @@ function Invoke-Mode {
     $modeMap = @{
         "health"     = @{ Func = "Invoke-HealthCheck";        Mod = "mode-health.ps1";     Label = "健康检查" }
         "auth"       = @{ Func = "Invoke-AuthReset";          Mod = "mode-auth.ps1";       Label = "认证重置" }
+        "relogin"    = @{ Func = "Invoke-AuthRelogin";       Mod = "mode-auth.ps1";       Label = "认证重登 (轻量)" }
         "cache"      = @{ Func = "Invoke-CacheCleanup";       Mod = "mode-cache.ps1";      Label = "缓存清理" }
         "network"    = @{ Func = "Invoke-NetworkDiagnostics"; Mod = "mode-network.ps1";    Label = "网络诊断" }
         "settings"   = @{ Func = "Invoke-SettingsReset";      Mod = "mode-settings.ps1";   Label = "设置重置" }
@@ -227,6 +229,7 @@ if ($Mode -ne "menu") {
         $menuMap = @{
             "1" = "health"
             "2" = "auth"
+            "2l" = "relogin"
             "3" = "cache"
             "4" = "network"
             "5" = "settings"
