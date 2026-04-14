@@ -2,6 +2,42 @@
 # Refactored from Fix-ClaudeAuth v3.1 (same logic, modular structure)
 # Part of Claude Code Diagnostic & Repair Toolkit v4.0
 
+# ── Helper: resolve claude executable (prefer .cmd over .ps1 on Windows) ──
+function Get-ClaudeExecutable {
+    $npmBin = Split-Path (Get-Command claude -ErrorAction SilentlyContinue).Source -ErrorAction SilentlyContinue
+    if ($npmBin) {
+        $cmd = Join-Path $npmBin "claude.cmd"
+        if (Test-Path $cmd) { return $cmd }
+    }
+    $resolved = Get-Command claude -ErrorAction SilentlyContinue
+    if ($resolved) { return $resolved.Source }
+    return $null
+}
+
+# ── Helper: run claude <args> via Start-Process, returns process object ──
+function Invoke-ClaudeProcess {
+    param([string[]]$ArgumentList, [string]$StdOut, [string]$StdErr)
+    $exe = Get-ClaudeExecutable
+    if (-not $exe) { throw "claude not found in PATH" }
+
+    if ($exe -match '\.ps1$') {
+        # PS1 entry: wrap in powershell.exe so Start-Process can exec it
+        return Start-Process -FilePath "powershell.exe" `
+            -ArgumentList (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $exe) + $ArgumentList) `
+            -NoNewWindow -PassThru -Wait `
+            -RedirectStandardOutput $StdOut `
+            -RedirectStandardError  $StdErr `
+            -ErrorAction Stop
+    } else {
+        return Start-Process -FilePath $exe `
+            -ArgumentList $ArgumentList `
+            -NoNewWindow -PassThru -Wait `
+            -RedirectStandardOutput $StdOut `
+            -RedirectStandardError  $StdErr `
+            -ErrorAction Stop
+    }
+}
+
 # ══════════════════════════════════════════════════════════════
 # ── Show-CurrentAccount: Read-only account reporter ──────────
 # ══════════════════════════════════════════════════════════════
@@ -332,12 +368,9 @@ function Invoke-AuthCleanup {
     if ($claudeExe) {
         Write-Status "INFO" "执行 claude logout ..."
         try {
-            $proc = Start-Process -FilePath $claudeExe.Source `
-                                  -ArgumentList "logout" `
-                                  -NoNewWindow -PassThru -Wait `
-                                  -RedirectStandardOutput "$env:TEMP\claude_logout.txt" `
-                                  -RedirectStandardError  "$env:TEMP\claude_logout_err.txt" `
-                                  -ErrorAction Stop
+            $proc = Invoke-ClaudeProcess -ArgumentList @("logout") `
+                -StdOut "$env:TEMP\claude_logout.txt" `
+                -StdErr "$env:TEMP\claude_logout_err.txt"
             Write-Status "OK" "claude logout 完成 (exit $($proc.ExitCode))"
         } catch {
             Write-Status "SKIP" "claude logout 跳过: $_"
@@ -794,11 +827,9 @@ function Invoke-AuthRelogin {
         Export-AuthBaseline -Reason "relogin-pre-logout" | Out-Null
 
         try {
-            $proc = Start-Process -FilePath $claudeExe.Source `
-                -ArgumentList "logout" `
-                -NoNewWindow -PassThru -Wait `
-                -RedirectStandardOutput "$env:TEMP\claude_relogin_logout.txt" `
-                -RedirectStandardError  "$env:TEMP\claude_relogin_logout_err.txt"
+            $proc = Invoke-ClaudeProcess -ArgumentList @("logout") `
+                -StdOut "$env:TEMP\claude_relogin_logout.txt" `
+                -StdErr "$env:TEMP\claude_relogin_logout_err.txt"
             Write-Status "OK" "claude logout 完成 (exit $($proc.ExitCode))"
         } catch {
             Write-Status "ERROR" "claude logout 失败: $_"
