@@ -1,6 +1,105 @@
-﻿# mode-auth.ps1 — Mode 2: Authentication Reset
+﻿# mode-auth.ps1 — Mode 2: Authentication Reset + Account Inspection
 # Refactored from Fix-ClaudeAuth v3.1 (same logic, modular structure)
 # Part of Claude Code Diagnostic & Repair Toolkit v4.0
+
+# ══════════════════════════════════════════════════════════════
+# ── Show-CurrentAccount: Read-only account reporter ──────────
+# ══════════════════════════════════════════════════════════════
+
+function Show-CurrentAccount {
+    Write-Section "当前 Claude Code 登录账号" "[只读]"
+
+    $credFile = $CREDENTIALS_FILE
+    if (-not (Test-Path $credFile)) {
+        Write-Status "WARN" "未找到凭据文件: $credFile"
+        Write-Status "INFO" "Claude Code 可能尚未登录，或凭据路径不同"
+        Write-Host ""
+        Write-Host "  请运行 'claude login' 完成登录后再检查。" -ForegroundColor Yellow
+        return
+    }
+
+    try {
+        $raw = Get-Content $credFile -Raw -Encoding UTF8
+        $cred = $raw | ConvertFrom-Json
+    } catch {
+        Write-Status "ERROR" "凭据文件解析失败: $_"
+        return
+    }
+
+    # Extract from oauthAccount (Claude Code CLI standard format)
+    $acct = $null
+    if ($cred.PSObject.Properties["oauthAccount"]) {
+        $acct = $cred.oauthAccount
+    } elseif ($cred.PSObject.Properties["claudeAiOauth"]) {
+        # Older format
+        $acct = $cred.claudeAiOauth
+    }
+
+    if (-not $acct) {
+        Write-Status "WARN" "凭据文件格式不识别，原始内容如下（已遮码敏感字段）:"
+        $sanitized = $raw -replace '"accessToken"\s*:\s*"[^"]{6}[^"]*"', '"accessToken": "***REDACTED***"'
+        $sanitized = $sanitized -replace '"refreshToken"\s*:\s*"[^"]{6}[^"]*"', '"refreshToken": "***REDACTED***"'
+        Write-Host $sanitized
+        return
+    }
+
+    # Parse expiry
+    $expiresAt = $null
+    $expiryLabel = "N/A"
+    $expiryColor = "Gray"
+    if ($acct.PSObject.Properties["expiresAt"]) {
+        try {
+            $expiresAt = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$acct.expiresAt).LocalDateTime
+            $remaining = $expiresAt - [DateTime]::Now
+            if ($remaining.TotalMinutes -lt 0) {
+                $expiryLabel = "已过期 ($($expiresAt.ToString('yyyy-MM-dd HH:mm')))"
+                $expiryColor = "Red"
+            } elseif ($remaining.TotalHours -lt 1) {
+                $expiryLabel = "即将过期 ($([int]$remaining.TotalMinutes) 分钟后)"
+                $expiryColor = "Yellow"
+            } else {
+                $expiryLabel = "$($expiresAt.ToString('yyyy-MM-dd HH:mm')) (还有 $([int]$remaining.TotalHours) 小时)"
+                $expiryColor = "Green"
+            }
+        } catch { $expiryLabel = "解析失败" }
+    }
+
+    # Print table
+    Write-Host ""
+    Write-Host "  ┌─────────────────────────────────────────────────────┐" -ForegroundColor Cyan
+    Write-Host "  │            当前登录账号信息  (只读)                 │" -ForegroundColor Cyan
+    Write-Host "  ├─────────────────────────────────────────────────────┤" -ForegroundColor Cyan
+
+    $fields = [ordered]@{
+        "Email"           = if ($acct.PSObject.Properties["emailAddress"]) { $acct.emailAddress } else { "N/A" }
+        "Account UUID"    = if ($acct.PSObject.Properties["accountUuid"])  { $acct.accountUuid  } else { "N/A" }
+        "Org UUID"        = if ($acct.PSObject.Properties["organizationUuid"]) { $acct.organizationUuid } else { "(无组织)" }
+        "Org Name"        = if ($acct.PSObject.Properties["organizationName"])  { $acct.organizationName  } else { "(无组织)" }
+        "Token 过期"      = $expiryLabel
+        "Scopes"          = if ($acct.PSObject.Properties["scopes"]) { ($acct.scopes -join ", ") } else { "N/A" }
+    }
+
+    foreach ($kv in $fields.GetEnumerator()) {
+        $label = ("  │  " + $kv.Key).PadRight(22)
+        $value = $kv.Value
+        Write-Host -NoNewline $label -ForegroundColor Cyan
+        if ($kv.Key -eq "Token 过期") {
+            Write-Host -NoNewline (": " + $value) -ForegroundColor $expiryColor
+        } else {
+            Write-Host -NoNewline (": " + $value) -ForegroundColor White
+        }
+        Write-Host ""
+    }
+
+    Write-Host "  └─────────────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host ""
+
+    if ($expiresAt -and ([DateTime]::Now -gt $expiresAt)) {
+        Write-Status "WARN" "Token 已过期！运行 Mode 7 (认证恢复) 重新登录"
+    } else {
+        Write-Status "OK" "账号信息读取完成。如需重置登录，使用 Mode 2 (认证重置)"
+    }
+}
 
 # ══════════════════════════════════════════════════════════════
 # ── Hosted-session detection / detached worker helpers ──────

@@ -1,5 +1,54 @@
 # Changelog
 
+## v7.3 Portable (2026-04-14) — GitHub 自分发 + 跨机诊断 + 账号查看
+
+**核心改进：工具从单机脚本升级为可自助分发的诊断平台，支持远程机器一键安装和 A↔B 通信诊断。**
+
+### New: scripts/bootstrap-remote.ps1
+- 远程机器一键安装脚本（iwr + iex one-liner）
+- 自动检测 git，克隆或更新仓库
+- 打印下一步操作指引（查看账号 / 菜单 / 认证恢复）
+
+### New: scripts/update-from-github.ps1
+- 日常从 GitHub 更新到最新 master
+- 支持 `-Tag vX.Y.Z` 固定到特定版本
+- 显示更新前后版本对比
+
+### New: modules/mode-peer-check.ps1 (Mode 8)
+- A↔B 跨机通信诊断（Ping + TCP 端口扫描）
+- 使用 .NET TcpClient 异步 2s 超时（兼容 Windows 10，避开 Test-NetConnection NUL 坑）
+- 检测本机 Clash TUN 是否拦截 LAN 流量
+- 检测 Windows 防火墙出站策略
+- 根因猜测（全端口关闭时区分：对端服务未启 / 防火墙拦截 / TUN 干扰 / 子网不同）
+- 配置文件：`config/peers.json`（从 `peers.example.json` 复制）
+
+### New: Show-CurrentAccount (Mode 2 -ShowCurrentAccount)
+- 只读读取 `~/.claude/.credentials.json`
+- 输出：Email / Account UUID / Org UUID / Org Name / Token 过期时间 / Scopes
+- Token 过期颜色提示（绿=健康 / 黄=即将过期 / 红=已过期）
+- 不写入、不清理、不触发 OAuth
+- 菜单快捷键：`[A]`；命令行：`-ShowCurrentAccount`
+
+### Updated: Claude-Toolkit.ps1
+- 版本 v7.2 → v7.3
+- 新增 `-ShowCurrentAccount` 参数（param 层拦截，直接读账号后退出）
+- 菜单新增 Mode 8（跨机诊断）+ `[A]`（查看账号）快捷键
+- 输入提示从 `[0-7/R/Q]` → `[0-8/A/R/Q]`
+- Mode dispatcher 加入 `peer-check`
+
+### New: .gitignore
+- 排除 `backups/` / `auth-baselines/` / `support-bundles/`（含凭据快照，不入库）
+- 排除 `config/peers.json`（机器本地 IP，仅 example.json 入库）
+
+### New: config/peers.example.json
+- 跨机配置模板：Machine B 192.168.3.11 + 7 个端口定义
+
+### GitHub 发布
+- 仓库：https://github.com/zmuleyu/claude-toolkit-portable（公开）
+- 一键安装：`iwr https://raw.githubusercontent.com/zmuleyu/claude-toolkit-portable/master/scripts/bootstrap-remote.ps1 -UseBasicParsing | iex`
+
+---
+
 ## v7.2 Portable (2026-04-09) — stale-patch detection
 
 **根因修复：dns_config.yaml 修补后 Clash Verge 未重启导致条目未生效。**

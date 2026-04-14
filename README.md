@@ -1,12 +1,33 @@
-# Claude Toolkit v6.0 Portable
+# Claude Toolkit v7.3 Portable
 
 Claude Code 诊断与修复工具集 — Windows 平台一站式 Claude Code 运维脚本。
 
-## Portable 使用
+## 安装
 
-将整个文件夹复制到任意位置即可使用，无需安装。支持 USB/网络共享/任意目录。
+### 方式一：一键安装（推荐，适用于远程机器）
 
-**首次使用**：运行 `setup.ps1` 检测环境并创建桌面快捷方式。
+PowerShell 粘贴运行：
+```powershell
+iwr https://raw.githubusercontent.com/zmuleyu/claude-toolkit-portable/master/scripts/bootstrap-remote.ps1 -UseBasicParsing | iex
+```
+
+### 方式二：git clone
+
+```powershell
+git clone https://github.com/zmuleyu/claude-toolkit-portable.git $env:USERPROFILE\claude-toolkit
+cd $env:USERPROFILE\claude-toolkit
+.\Claude-Toolkit.ps1
+```
+
+### 方式三：便携使用（本地已有）
+
+将整个文件夹复制到任意位置即可使用，无需安装。运行 `setup.ps1` 创建桌面快捷方式。
+
+### 日常更新
+
+```powershell
+.\scripts\update-from-github.ps1
+```
 
 ## 功能概览
 
@@ -18,21 +39,36 @@ Claude Code 诊断与修复工具集 — Windows 平台一站式 Claude Code 运
 | 4 | 网络诊断 | 只读 | DNS/TCP/TLS/HTTP 分层诊断 + fake-IP 检测 + 代理端口一致性 + Auth Readiness |
 | 5 | 设置重置 | 修改 | 备份 → 修复 VS Code → 清理全局/本地/项目级 → Desktop 审计 → 代理端口交叉验证 |
 | 6 | LAN 诊断 | 修复 | 7 步跨设备连接排查：IP/TUN/网络类型/防火墙/目标探测/ARP 发现/代理干扰 |
+| 7 | 认证恢复 | 修复 | 代理+fake-ip+Clash+OAuth 全流程一键恢复 |
+| 8 | 跨机诊断 | 只读 | A↔B 通信检测：Ping/端口扫描/Clash TUN 干扰/防火墙/根因猜测（v7.3 新增） |
 | 0 | 完整诊断 | 只读 | 按顺序运行 Mode 1 + Mode 4 |
+
+### 特殊标志
+
+| 标志 | 说明 |
+|------|------|
+| `-ShowCurrentAccount` | 只读打印当前登录账号（email / uuid / org / token 过期时间），不修改任何文件 |
+| `-AutoFix` | 网络诊断时自动修复发现的问题 |
 
 ## 快速使用
 
-**方式 1**：右键 `Claude-Toolkit.ps1` → "使用 PowerShell 运行"
-
-**方式 2**：双击 `run.bat`
-
-**方式 3**：命令行直接指定模式
 ```powershell
-powershell -ExecutionPolicy Bypass -File "<toolkit-dir>\Claude-Toolkit.ps1" -Mode health
-powershell -ExecutionPolicy Bypass -File "<toolkit-dir>\Claude-Toolkit.ps1" -Mode auth -ExpectedAccountUuid "<uuid>" -ExpectedEmail "<email>"
+# 查看当前登录账号（只读）
+.\Claude-Toolkit.ps1 -Mode auth -ShowCurrentAccount
+
+# 或菜单中按 [A]
+
+# 跨机通信诊断
+.\Claude-Toolkit.ps1 -Mode peer-check
+
+# 认证恢复（全流程）
+.\Claude-Toolkit.ps1 -Mode recovery
+
+# 交互菜单
+.\Claude-Toolkit.ps1
 ```
 
-**可用 Mode 参数**：`menu` | `health` | `auth` | `cache` | `network` | `settings` | `lan` | `full`
+**可用 Mode 参数**：`menu` | `health` | `auth` | `cache` | `network` | `settings` | `lan` | `recovery` | `peer-check` | `full`
 
 ## 项目结构
 
@@ -42,18 +78,25 @@ claude-toolkit/
 ├── run.bat                      批处理启动器
 ├── setup.ps1                    首次运行向导（环境检测 + 快捷方式）
 ├── create-shortcut.ps1          桌面快捷方式创建
+├── scripts/
+│   ├── bootstrap-remote.ps1     远程机器一键安装（git clone + 环境检测）
+│   └── update-from-github.ps1  从 GitHub 更新到最新版本
+├── config/
+│   └── peers.example.json       跨机诊断对端配置模板（复制为 peers.json 使用）
 ├── modules/
 │   ├── constants.ps1            路径常量 + 配置项
 │   ├── utils.ps1                共享工具函数 (Write-Status, Backup-File, JSON 读写等)
 │   ├── clash-helpers.ps1        Clash Verge / Mihomo API 辅助函数
+│   ├── clash-fake-ip-fix.ps1    fake-ip 过滤修补 + stale-patch 检测
 │   ├── mode-health.ps1          Mode 1: 健康检查
-│   ├── mode-auth.ps1            Mode 2: 认证重置
+│   ├── mode-auth.ps1            Mode 2: 认证重置 + 账号查看
 │   ├── mode-cache.ps1           Mode 3: 缓存清理
 │   ├── mode-network.ps1         Mode 4: 网络诊断
 │   ├── mode-settings.ps1        Mode 5: 设置重置
-│   └── mode-lan.ps1             Mode 6: LAN 跨设备诊断
+│   ├── mode-lan.ps1             Mode 6: LAN 跨设备诊断
+│   ├── mode-recovery.ps1        Mode 7: 认证恢复全流程
+│   └── mode-peer-check.ps1      Mode 8: A↔B 跨机通信诊断
 ├── docs/
-│   └── Fix-ClaudeAuth-v3.1.ps1  原版 v3.1 单文件脚本（归档）
 ├── README.md
 └── CHANGELOG.md
 ```

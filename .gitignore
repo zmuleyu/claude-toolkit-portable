@@ -1,2 +1,17 @@
+# Claude-Toolkit-Portable .gitignore
+
+# Auto-generated backups (may contain credential snippets)
 backups/
+auth-baselines/
+support-bundles/
+
+# Machine-local peer config (contains actual IPs)
+config/peers.json
+
+# Log and temp files
 *.log
+*.tmp
+*.temp
+
+# Support bundle zips
+support-bundle-*.zip

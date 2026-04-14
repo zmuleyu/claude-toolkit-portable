@@ -1,25 +1,30 @@
-﻿# Claude-Toolkit.ps1  v7.2 Portable
+﻿# Claude-Toolkit.ps1  v7.3 Portable
 # Claude Code Diagnostic & Repair Toolkit for Windows
 # Run as: Right-click -> "Run with PowerShell"
-# Or: powershell -ExecutionPolicy Bypass -File Claude-Toolkit.ps1 [-Mode health|auth|cache|network|settings|lan|recovery|full] [-ExpectedAccountUuid <uuid>] [-ExpectedEmail <email>] [-ExpectedOrgUuid <uuid>]
+# Or: powershell -ExecutionPolicy Bypass -File Claude-Toolkit.ps1 [-Mode health|auth|cache|network|settings|lan|recovery|peer-check|full] [-ExpectedAccountUuid <uuid>] [-ExpectedEmail <email>] [-ExpectedOrgUuid <uuid>] [-ShowCurrentAccount]
 #
 # Modes:
-#   1 (health)   - Read-only health check & diagnostic
-#   2 (auth)     - OAuth authentication reset
-#   3 (cache)    - Cache and storage cleanup
-#   4 (network)  - Network connectivity diagnostics + repair (fake-ip auto-patch)
-#   5 (settings) - Settings reset / restore defaults
-#   6 (lan)      - LAN cross-device connectivity diagnostics
-#   7 (recovery) - Guided auth recovery: proxy fix + fake-ip + Clash + OAuth
-#   0 (full)     - Run health + network (read-only overview)
+#   1 (health)      - Read-only health check & diagnostic
+#   2 (auth)        - OAuth authentication reset
+#   3 (cache)       - Cache and storage cleanup
+#   4 (network)     - Network connectivity diagnostics + repair (fake-ip auto-patch)
+#   5 (settings)    - Settings reset / restore defaults
+#   6 (lan)         - LAN cross-device connectivity diagnostics
+#   7 (recovery)    - Guided auth recovery: proxy fix + fake-ip + Clash + OAuth
+#   8 (peer-check)  - A<->B cross-machine communication diagnostic
+#   0 (full)        - Run health + network (read-only overview)
+#
+# Special flags:
+#   -ShowCurrentAccount  - Print current logged-in account (email/uuid/org), read-only, no changes
 #
 # Requires: PowerShell 5.1+, Windows 10/11
 # Optional: Python 3.x (enables better JSON handling)
 
 param(
-    [ValidateSet("menu","health","auth","cache","network","settings","lan","recovery","full")]
+    [ValidateSet("menu","health","auth","cache","network","settings","lan","recovery","peer-check","full")]
     [string]$Mode = "menu",
-    [switch]$AutoFix,   # Auto-repair discovered issues (network mode)
+    [switch]$AutoFix,            # Auto-repair discovered issues (network mode)
+    [switch]$ShowCurrentAccount, # Read-only: print current logged-in Claude account
     [string]$ExpectedAccountUuid,
     [string]$ExpectedEmail,
     [string]$ExpectedOrgUuid,
@@ -52,7 +57,8 @@ $optionalModules = @(
     "mode-network.ps1",
     "mode-settings.ps1",
     "mode-lan.ps1",
-    "mode-recovery.ps1"
+    "mode-recovery.ps1",
+    "mode-peer-check.ps1"
 )
 
 foreach ($mod in $requiredModules) {
@@ -85,6 +91,17 @@ $script:ExpectedEmail = $ExpectedEmail
 $script:ExpectedOrgUuid = $ExpectedOrgUuid
 $script:AuthBrowserProfile = $AuthBrowserProfile
 Find-PythonCmd | Out-Null
+
+# Handle -ShowCurrentAccount shortcut (read-only, no menu)
+if ($ShowCurrentAccount.IsPresent) {
+    Show-Banner
+    if ($LoadedModes["mode-auth.ps1"]) {
+        Show-CurrentAccount
+    } else {
+        Write-Host "  [!!] mode-auth.ps1 未加载，无法读取账号信息" -ForegroundColor Red
+    }
+    exit 0
+}
 
 # ── Banner ────────────────────────────────────────────────────
 function Show-Banner {
@@ -121,13 +138,14 @@ function Show-MainMenu {
     Write-Host "  ├──────────────────────────────────────────────────┤" -ForegroundColor Cyan
 
     $modes = @(
-        @{ Key="1"; Label="健康检查"; Desc="只读诊断，不修改文件";          Mod="mode-health.ps1" },
-        @{ Key="2"; Label="认证重置"; Desc="清除OAuth令牌，重新登录";       Mod="mode-auth.ps1" },
-        @{ Key="3"; Label="缓存清理"; Desc="释放磁盘空间";                 Mod="mode-cache.ps1" },
-        @{ Key="4"; Label="网络诊断"; Desc="DNS/HTTPS/代理/端口一致性";    Mod="mode-network.ps1" },
-        @{ Key="5"; Label="设置重置"; Desc="恢复安全默认配置";             Mod="mode-settings.ps1" },
-        @{ Key="6"; Label="LAN 诊断"; Desc="跨设备连接排查/防火墙修复";   Mod="mode-lan.ps1" },
-        @{ Key="7"; Label="认证恢复"; Desc="代理+fake-ip+Clash+OAuth 全流程"; Mod="mode-recovery.ps1" }
+        @{ Key="1"; Label="健康检查"; Desc="只读诊断，不修改文件";            Mod="mode-health.ps1" },
+        @{ Key="2"; Label="认证重置"; Desc="清除OAuth令牌，重新登录";         Mod="mode-auth.ps1" },
+        @{ Key="3"; Label="缓存清理"; Desc="释放磁盘空间";                   Mod="mode-cache.ps1" },
+        @{ Key="4"; Label="网络诊断"; Desc="DNS/HTTPS/代理/端口一致性";      Mod="mode-network.ps1" },
+        @{ Key="5"; Label="设置重置"; Desc="恢复安全默认配置";               Mod="mode-settings.ps1" },
+        @{ Key="6"; Label="LAN 诊断"; Desc="跨设备连接排查/防火墙修复";     Mod="mode-lan.ps1" },
+        @{ Key="7"; Label="认证恢复"; Desc="代理+fake-ip+Clash+OAuth 全流程"; Mod="mode-recovery.ps1" },
+        @{ Key="8"; Label="跨机诊断"; Desc="A<->B 通信检测/端口/根因";       Mod="mode-peer-check.ps1" }
     )
 
     foreach ($m in $modes) {
@@ -139,6 +157,7 @@ function Show-MainMenu {
 
     Write-Host "  │                                                  │" -ForegroundColor Cyan
     Write-Host "  │  [0] 完整诊断     (按顺序运行 1 + 4)            │" -ForegroundColor White
+    Write-Host "  │  [A] 查看账号     (只读，显示当前登录账号)      │" -ForegroundColor Cyan
     Write-Host "  │  [R] 认证恢复     (快捷入口，等同于 7)          │" -ForegroundColor Cyan
     Write-Host "  │  [Q] 退出                                       │" -ForegroundColor White
     Write-Host "  └──────────────────────────────────────────────────┘" -ForegroundColor Cyan
@@ -150,13 +169,14 @@ function Invoke-Mode {
     param([string]$ModeName)
 
     $modeMap = @{
-        "health"   = @{ Func = "Invoke-HealthCheck";        Mod = "mode-health.ps1";   Label = "健康检查" }
-        "auth"     = @{ Func = "Invoke-AuthReset";          Mod = "mode-auth.ps1";     Label = "认证重置" }
-        "cache"    = @{ Func = "Invoke-CacheCleanup";       Mod = "mode-cache.ps1";    Label = "缓存清理" }
-        "network"  = @{ Func = "Invoke-NetworkDiagnostics"; Mod = "mode-network.ps1";  Label = "网络诊断" }
-        "settings" = @{ Func = "Invoke-SettingsReset";      Mod = "mode-settings.ps1"; Label = "设置重置" }
-        "lan"      = @{ Func = "Invoke-LanDiagnostics";     Mod = "mode-lan.ps1";      Label = "LAN 诊断" }
-        "recovery" = @{ Func = "Invoke-AuthRecovery";       Mod = "mode-recovery.ps1"; Label = "认证恢复" }
+        "health"     = @{ Func = "Invoke-HealthCheck";        Mod = "mode-health.ps1";     Label = "健康检查" }
+        "auth"       = @{ Func = "Invoke-AuthReset";          Mod = "mode-auth.ps1";       Label = "认证重置" }
+        "cache"      = @{ Func = "Invoke-CacheCleanup";       Mod = "mode-cache.ps1";      Label = "缓存清理" }
+        "network"    = @{ Func = "Invoke-NetworkDiagnostics"; Mod = "mode-network.ps1";    Label = "网络诊断" }
+        "settings"   = @{ Func = "Invoke-SettingsReset";      Mod = "mode-settings.ps1";   Label = "设置重置" }
+        "lan"        = @{ Func = "Invoke-LanDiagnostics";     Mod = "mode-lan.ps1";        Label = "LAN 诊断" }
+        "recovery"   = @{ Func = "Invoke-AuthRecovery";       Mod = "mode-recovery.ps1";   Label = "认证恢复" }
+        "peer-check" = @{ Func = "Invoke-PeerCheck";          Mod = "mode-peer-check.ps1"; Label = "跨机诊断" }
     }
 
     $info = $modeMap[$ModeName]
@@ -203,7 +223,7 @@ if ($Mode -ne "menu") {
     # Interactive menu loop
     do {
         Show-MainMenu
-        $choice = (Read-Host "  请选择功能 [0-7/R/Q]").ToLower().Trim()
+        $choice = (Read-Host "  请选择功能 [0-8/A/R/Q]").ToLower().Trim()
         $menuMap = @{
             "1" = "health"
             "2" = "auth"
@@ -212,10 +232,18 @@ if ($Mode -ne "menu") {
             "5" = "settings"
             "6" = "lan"
             "7" = "recovery"
+            "8" = "peer-check"
             "r" = "recovery"
         }
 
-        if ($menuMap.ContainsKey($choice)) {
+        if ($choice -eq "a") {
+            # Read-only account view
+            if ($LoadedModes["mode-auth.ps1"]) {
+                Show-CurrentAccount
+            } else {
+                Write-Host "  [!!] mode-auth.ps1 未加载" -ForegroundColor Red
+            }
+        } elseif ($menuMap.ContainsKey($choice)) {
             Invoke-Mode $menuMap[$choice]
         } elseif ($choice -eq "0") {
             Invoke-Mode "health"

@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this file to peers.json and fill in your actual machine IPs/ports",
+  "peers": {
+    "B": {
+      "ip": "192.168.3.11",
+      "label": "Machine B (AOC Dev)",
+      "ports": [
+        { "port": 22,    "label": "SSH" },
+        { "port": 3389,  "label": "RDP" },
+        { "port": 445,   "label": "SMB" },
+        { "port": 18850, "label": "lan-toolkit preview" },
+        { "port": 19001, "label": "lan-toolkit send" },
+        { "port": 8384,  "label": "Syncthing" },
+        { "port": 18766, "label": "devmanager" }
+      ]
+    }
+  }
+}
