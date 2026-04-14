@@ -1,4 +1,4 @@
-# Run-Auth-Recovery.ps1 — v7.0+ backward-compatible wrapper
+# Run-Auth-Recovery.ps1 - v7.0+ backward-compatible wrapper
 # Full recovery logic is now Mode 7 in Claude-Toolkit.ps1.
 # Prefer: Claude-Toolkit.ps1 -Mode recovery
 #
@@ -36,11 +36,11 @@ $script:PythonExe           = $null
 Find-PythonCmd | Out-Null
 
 Write-Host ""
-Write-Host "  Claude Code Auth Recovery  (v7.0 — Mode 7)" -ForegroundColor Cyan
+Write-Host "  Claude Code Auth Recovery  (v7.0 - Mode 7)" -ForegroundColor Cyan
 Write-Host "  For the full toolkit: Claude-Toolkit.ps1 -Mode recovery" -ForegroundColor DarkGray
 Write-Host ""
 
 Invoke-AuthRecovery
 
 Write-Host ""
-Read-Host "  按 Enter 退出"
+Read-Host 'Press Enter to exit'

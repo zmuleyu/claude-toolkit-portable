@@ -144,6 +144,7 @@ function Invoke-CacheCleanup {
         foreach ($wt in $wtDirs) {
             $gitDir = Join-Path $wt.FullName ".git"
             $isOrphan = $false
+            $skipOrphanCheck = $false
             if (-not (Test-Path $gitDir)) {
                 $isOrphan = $true
             } else {
@@ -151,8 +152,20 @@ function Invoke-CacheCleanup {
                 $gitContent = Get-Content $gitDir -Raw -ErrorAction SilentlyContinue
                 if ($gitContent -match "gitdir:\s*(.+)") {
                     $refPath = $Matches[1].Trim()
+                    if (-not [System.IO.Path]::IsPathRooted($refPath)) {
+                        $refPath = [System.IO.Path]::GetFullPath((Join-Path $wt.FullName $refPath))
+                    }
                     if (-not (Test-Path $refPath)) { $isOrphan = $true }
+                } elseif ($gitContent) {
+                    Write-Status "WARN" "无法解析 worktree 引用，已跳过: $($wt.FullName)"
+                    $skipOrphanCheck = $true
+                } else {
+                    Write-Status "WARN" "无法读取 worktree 引用，已跳过: $($wt.FullName)"
+                    $skipOrphanCheck = $true
                 }
+            }
+            if ($skipOrphanCheck) {
+                continue
             }
             if ($isOrphan) {
                 $orphanedWt += $wt

@@ -56,6 +56,8 @@ function Start-DetachedAuthReset {
 `$script:ExpectedEmail = '$expectedEmail'
 `$script:ExpectedOrgUuid = '$expectedOrgUuid'
 `$script:AuthBrowserProfile = '$authBrowserProfile'
+`$script:AuthResetStartUtc = [DateTime]::UtcNow
+`$script:LastLoginStateChangeUtc = `$null
 . (Join-Path `$toolkitRoot 'modules\constants.ps1')
 . (Join-Path `$toolkitRoot 'modules\utils.ps1')
 . (Join-Path `$toolkitRoot 'modules\clash-helpers.ps1')
@@ -69,9 +71,14 @@ Get-Process -Name @('Code', 'Code - Insiders') -ErrorAction SilentlyContinue | S
 Get-Process -Name @('claude') -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name @('node') -ErrorAction SilentlyContinue | Where-Object { `$_.Path -match 'claude' } | Stop-Process -Force
 
-`$state = @{ WasRunning = `$false; PreviousMode = `$null; ApiCfg = `$null }
+`$state = Invoke-ClashDirectMode
 Invoke-AuthCleanup -ClashState `$state
 Invoke-CleanLogin -ClashState `$state
+`$identityStatus = Invoke-PostLoginIdentityCheck
+Invoke-PostLoginCapabilityCheck
+if (`$identityStatus -eq 'account_mismatch') {
+    Write-Status 'ERROR' '最终状态: account_mismatch'
+}
 "@
 
     $workerScript | Set-Content $tmpWorker -Encoding UTF8
@@ -104,8 +111,13 @@ function Show-AuthReadinessReport {
     param([object]$Readiness)
 
     Write-Status "INFO" "登录环境判定: $(Get-AuthReadinessLabel -Readiness $Readiness) / $($Readiness.Status)"
-    if ($Readiness.SystemProxy.Enabled -and $Readiness.SystemProxy.Server) {
-        Write-Status "WARN" "系统代理仍启用: $($Readiness.SystemProxy.Server)"
+    if ($Readiness.SystemProxy.Enabled -or $Readiness.SystemProxy.Server -or $Readiness.SystemProxy.AutoConfigUrl) {
+        if ($Readiness.SystemProxy.Server) {
+            Write-Status "WARN" "系统代理仍启用: $($Readiness.SystemProxy.Server)"
+        }
+        if ($Readiness.SystemProxy.AutoConfigUrl) {
+            Write-Status "WARN" "系统 PAC 代理仍启用: $($Readiness.SystemProxy.AutoConfigUrl)"
+        }
     } else {
         Write-Status "OK" "系统代理未启用"
     }
@@ -485,12 +497,14 @@ Read-Host "按 Enter 退出"
 
         if ($loginResult.Success) {
             Write-Status "OK" "检测到 Claude CLI 登录状态已完成"
+            $script:LastLoginStateChangeUtc = $loginResult.LastStateChanged
             if ($loginResult.AccountInfo) {
                 Write-Status "INFO" "实际账号: $($loginResult.AccountInfo.Email)"
                 Write-Status "INFO" "accountUuid: $($loginResult.AccountInfo.AccountUuid)"
                 Write-Status "INFO" "organizationUuid: $($loginResult.AccountInfo.OrganizationUuid)"
             }
         } else {
+            $script:LastLoginStateChangeUtc = $null
             $postReadiness = Get-AuthNetworkReadiness
             Write-Status "ERROR" "在 180 秒内未检测到有效登录完成"
             Write-Status "ERROR" "状态分类: $($postReadiness.Status)"
@@ -582,10 +596,25 @@ function Invoke-PostLoginCapabilityCheck {
 function Invoke-PostLoginIdentityCheck {
     Write-Section "校验登录后的账号身份..." "[附加步骤 A]"
 
+    $stateFile = "$env:USERPROFILE\.claude.json"
+    $lastLoginStateChangeUtc = $script:LastLoginStateChangeUtc
+    $authResetStartUtc = $script:AuthResetStartUtc
+    if (-not $lastLoginStateChangeUtc -and (Test-Path $stateFile)) {
+        $stateWriteUtc = (Get-Item $stateFile).LastWriteTimeUtc
+        if (-not $authResetStartUtc -or $stateWriteUtc -gt $authResetStartUtc) {
+            $lastLoginStateChangeUtc = $stateWriteUtc
+        }
+    }
+
+    if (-not $lastLoginStateChangeUtc) {
+        Write-Status "WARN" "未检测到本轮登录产生新的 ~/.claude.json 写入，跳过账号真相校验"
+        return "identity_not_verified"
+    }
+
     $accountInfo = Get-ClaudeAccountInfo
     if (-not $accountInfo) {
         Write-Status "WARN" "未读取到 ~/.claude.json 中的 oauthAccount，无法做账号真相校验"
-        return "network_not_ready"
+        return "identity_not_verified"
     }
 
     Write-Status "INFO" "实际 email: $($accountInfo.Email)"
@@ -621,6 +650,8 @@ function Invoke-PostLoginIdentityCheck {
 # ══════════════════════════════════════════════════════════════
 
 function Invoke-AuthReset {
+    $script:AuthResetStartUtc = [DateTime]::UtcNow
+    $script:LastLoginStateChangeUtc = $null
     Export-AuthBaseline -Reason "auth-reset-start" | Out-Null
     $hostCtx = Get-HostedVscodeContext
     if ($hostCtx.IsHostedInVscode) {

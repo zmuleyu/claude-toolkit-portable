@@ -107,8 +107,11 @@ function Backup-File {
         New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
     }
 
-    $relativeName = Split-Path $FilePath -Leaf
-    $backupPath = Join-Path $backupRoot $relativeName
+    $drive = [System.IO.Path]::GetPathRoot($FilePath)
+    $relativeName = $FilePath.Substring($drive.Length).TrimStart('\')
+    if (-not $relativeName) { $relativeName = Split-Path $FilePath -Leaf }
+    $safeRelativeName = ($relativeName -replace '[\\/:*?"<>|]', '_')
+    $backupPath = Join-Path $backupRoot $safeRelativeName
     Copy-Item $FilePath $backupPath -Force
     Write-Status "INFO" "备份: $backupPath"
     return $backupPath
@@ -131,7 +134,13 @@ function Backup-Path {
         New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
     }
 
-    $leaf = if ($Label) { $Label } else { Split-Path $Path -Leaf }
+    if ($Label) {
+        $leaf = $Label
+    } else {
+        $root = [System.IO.Path]::GetPathRoot($Path)
+        $leaf = $Path.Substring($root.Length).TrimStart('\')
+        if (-not $leaf) { $leaf = Split-Path $Path -Leaf }
+    }
     $safeLeaf = ($leaf -replace '[\\/:*?"<>|]', '_')
     $backupPath = Join-Path $backupRoot $safeLeaf
 
@@ -283,7 +292,17 @@ function Get-VscodeExtVersion {
     if (-not (Test-Path $VSCODE_EXT_DIR)) { return $null }
     $extDirs = Get-ChildItem $VSCODE_EXT_DIR -Directory -Filter "anthropic.claude-code-*" -ErrorAction SilentlyContinue
     if (-not $extDirs) { return $null }
-    $latest = $extDirs | Sort-Object Name -Descending | Select-Object -First 1
+    $latest = $extDirs |
+        Sort-Object `
+            @{ Expression = {
+                    if ($_.Name -match "anthropic\.claude-code-(\d+)\.(\d+)\.(\d+)") {
+                        [version]("{0}.{1}.{2}" -f $Matches[1], $Matches[2], $Matches[3])
+                    } else {
+                        [version]"0.0.0"
+                    }
+                }; Descending = $true },
+            @{ Expression = { $_.Name }; Descending = $true } |
+        Select-Object -First 1
     if ($latest.Name -match "anthropic\.claude-code-(\d+\.\d+\.\d+)") {
         return $Matches[1]
     }
@@ -397,9 +416,13 @@ function Get-AuthNetworkReadiness {
         $status = "dns_fake_ip_active"
         $reason = "Auth domains still resolve to Clash/TUN fake-IP addresses"
         $ready = $false
-    } elseif ($systemProxy.Enabled -and $systemProxy.Server) {
+    } elseif ($systemProxy.Enabled -or $systemProxy.Server -or $systemProxy.AutoConfigUrl) {
         $status = "proxy_residual"
-        $reason = "System proxy is still enabled"
+        if ($systemProxy.AutoConfigUrl) {
+            $reason = "System PAC proxy is still enabled"
+        } else {
+            $reason = "System proxy is still enabled"
+        }
         $ready = $false
     } elseif ($proxyEnvRows.Count -gt 0) {
         $status = "proxy_residual"

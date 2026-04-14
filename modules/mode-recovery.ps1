@@ -10,6 +10,7 @@ function Disable-SystemProxy {
     $proxyRegPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
     Set-ItemProperty -Path $proxyRegPath -Name ProxyEnable -Value 0
     Set-ItemProperty -Path $proxyRegPath -Name ProxyServer -Value ""
+    Set-ItemProperty -Path $proxyRegPath -Name AutoConfigURL -Value ""
     Write-Status "OK" "System proxy disabled"
 }
 
