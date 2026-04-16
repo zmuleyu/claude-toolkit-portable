@@ -1,5 +1,40 @@
 # Changelog
 
+## v7.5 Portable (2026-04-16) — BOM修复 + 菜单精简 + 模块整合
+
+**核心改进：UTF-8 BOM 修复（解决 PS 5.1 ParseError）+ 菜单从 8项→4分组/7项 + peer-check 并入 LAN + diagnostics-shared 新建。**
+
+### Fixed: UTF-8 BOM 编码 (4 个文件)
+- `Claude-Toolkit.ps1` / `modules/mode-auth.ps1` / `modules/mode-recovery.ps1` / `modules/mode-peer-check.ps1`
+- 根因：BOM 导致 PS 5.1 在 dot-source 时抛出 ParseError，模块无法加载
+- 修复：以无 BOM UTF-8 重新写入（保持功能不变）
+
+### Changed: 菜单精简（菜单层面重组）
+- 8项无分组 → 4分组/7项：**诊断**（1/4）/ **认证**（A/2/7）/ **维护**（3/5）/ **网络**（6）
+- 移除 Mode 8 独立入口（peer-check 功能已并入 Mode 6 LAN）
+- 输入提示从 `[0-8/A/R/Q]` → `[0-8/A/R/Q]`（保持兼容，后端实际接受同等范围）
+- `[2]` 映射改为 `relogin`（轻量重登），更符合日常使用场景
+
+### Changed: modules/mode-lan.ps1 — peer-check 功能整合
+- 将 `modules/mode-peer-check.ps1` 的三个函数合并进 `mode-lan.ps1`:
+  - `Test-TcpPort` / `Invoke-PingTest` / `Get-PeersConfig` / `Invoke-PeerScan`
+- Mode 6 LAN 诊断 Section 5/7 自动检测 `config/peers.json`：
+  - 存在 → 自动扫描所有 peer（Ping + 端口矩阵 + 根因诊断）
+  - 不存在 → 手动输入 IP（与旧版兼容）
+- `mode-peer-check.ps1` 保留为向后兼容占位（实际逻辑已在 lan 中执行）
+
+### New: modules/diagnostics-shared.ps1
+- 提取 `mode-health.ps1` 和 `mode-network.ps1` 共用的诊断函数
+- `Invoke-DnsResolutionBatch` — DNS 批量解析（返回 OkCount/FailCount/Results）
+- `Invoke-TcpConnectBatch` — TCP 连接批量测试
+- `Get-ClaudeAuthState` — 只读读取认证状态摘要
+- 作为 `requiredModules` 之一在启动时强制加载
+
+### Updated: constants.ps1
+- `$SCRIPT_VERSION` 7.4 → 7.5
+
+---
+
 ## v7.4 Portable (2026-04-14) — Mode 2L 轻量认证重登
 
 **核心改进：新增 `Invoke-AuthRelogin`（Mode 2L），专注"logout → 弹浏览器 → 双层验证"三步闭环，不触碰 settings/env/VS Code 状态。**

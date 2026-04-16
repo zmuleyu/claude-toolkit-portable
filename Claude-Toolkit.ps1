@@ -1,4 +1,4 @@
-﻿# Claude-Toolkit.ps1  v7.3 Portable
+﻿# Claude-Toolkit.ps1  v7.5 Portable
 # Claude Code Diagnostic & Repair Toolkit for Windows
 # Run as: Right-click -> "Run with PowerShell"
 # Or: powershell -ExecutionPolicy Bypass -File Claude-Toolkit.ps1 [-Mode health|auth|cache|network|settings|lan|recovery|peer-check|full] [-ExpectedAccountUuid <uuid>] [-ExpectedEmail <email>] [-ExpectedOrgUuid <uuid>] [-ShowCurrentAccount]
@@ -47,6 +47,7 @@ if (-not (Test-Path $ModulesDir)) {
 $requiredModules = @(
     "constants.ps1",
     "utils.ps1",
+    "diagnostics-shared.ps1",
     "clash-helpers.ps1",
     "clash-fake-ip-fix.ps1"
 )
@@ -136,20 +137,13 @@ function Show-MainMenu {
     Write-Host "  ┌──────────────────────────────────────────────────┐" -ForegroundColor Cyan
     Write-Host "  │              请选择功能模式                      │" -ForegroundColor Cyan
     Write-Host "  ├──────────────────────────────────────────────────┤" -ForegroundColor Cyan
+    Write-Host "  │  ── 诊断 ────────────────────────────────────── │" -ForegroundColor DarkGray
 
-    $modes = @(
-        @{ Key="1"; Label="健康检查"; Desc="只读诊断，不修改文件";            Mod="mode-health.ps1" },
-        @{ Key="2"; Label="认证重置"; Desc="清除OAuth令牌，重新登录";         Mod="mode-auth.ps1" },
-        @{ Key="2L"; Label="认证重登"; Desc="退出+登录+验证 (不动 settings/env)"; Mod="mode-auth.ps1" },
-        @{ Key="3"; Label="缓存清理"; Desc="释放磁盘空间";                   Mod="mode-cache.ps1" },
-        @{ Key="4"; Label="网络诊断"; Desc="DNS/HTTPS/代理/端口一致性";      Mod="mode-network.ps1" },
-        @{ Key="5"; Label="设置重置"; Desc="恢复安全默认配置";               Mod="mode-settings.ps1" },
-        @{ Key="6"; Label="LAN 诊断"; Desc="跨设备连接排查/防火墙修复";     Mod="mode-lan.ps1" },
-        @{ Key="7"; Label="认证恢复"; Desc="代理+fake-ip+Clash+OAuth 全流程"; Mod="mode-recovery.ps1" },
-        @{ Key="8"; Label="跨机诊断"; Desc="A<->B 通信检测/端口/根因";       Mod="mode-peer-check.ps1" }
+    $diagModes = @(
+        @{ Key="1"; Label="快速诊断"; Desc="12点只读检查 (OAuth/CLI/网络)"; Mod="mode-health.ps1" },
+        @{ Key="4"; Label="深度诊断"; Desc="DNS/TLS/HTTP/代理/fake-IP";      Mod="mode-network.ps1" }
     )
-
-    foreach ($m in $modes) {
+    foreach ($m in $diagModes) {
         $available = $LoadedModes[$m.Mod]
         $status = if ($available) { "" } else { " [即将推出]" }
         $color  = if ($available) { "White" } else { "DarkGray" }
@@ -157,9 +151,49 @@ function Show-MainMenu {
     }
 
     Write-Host "  │                                                  │" -ForegroundColor Cyan
-    Write-Host "  │  [0] 完整诊断     (按顺序运行 1 + 4)            │" -ForegroundColor White
-    Write-Host "  │  [A] 查看账号     (只读，显示当前登录账号)      │" -ForegroundColor Cyan
-    Write-Host "  │  [R] 认证恢复     (快捷入口，等同于 7)          │" -ForegroundColor Cyan
+    Write-Host "  │  ── 认证 ────────────────────────────────────── │" -ForegroundColor DarkGray
+
+    $authModes = @(
+        @{ Key="A"; Label="查看账号"; Desc="只读，显示当前登录状态";          Mod="mode-auth.ps1" },
+        @{ Key="2"; Label="认证重登"; Desc="退出+登录+验证 (轻量)";           Mod="mode-auth.ps1" },
+        @{ Key="7"; Label="认证恢复"; Desc="代理修复+fake-ip+OAuth 全流程";   Mod="mode-recovery.ps1" }
+    )
+    foreach ($m in $authModes) {
+        $available = $LoadedModes[$m.Mod]
+        $status = if ($available) { "" } else { " [即将推出]" }
+        $color  = if ($available) { "White" } else { "DarkGray" }
+        Write-Host ("  │  [{0}] {1,-8} {2}{3}" -f $m.Key, $m.Label, $m.Desc, $status).PadRight(52) + "│" -ForegroundColor $color
+    }
+
+    Write-Host "  │                                                  │" -ForegroundColor Cyan
+    Write-Host "  │  ── 维护 ────────────────────────────────────── │" -ForegroundColor DarkGray
+
+    $maintModes = @(
+        @{ Key="3"; Label="缓存清理"; Desc="释放磁盘空间";                   Mod="mode-cache.ps1" },
+        @{ Key="5"; Label="设置重置"; Desc="恢复安全默认配置";               Mod="mode-settings.ps1" }
+    )
+    foreach ($m in $maintModes) {
+        $available = $LoadedModes[$m.Mod]
+        $status = if ($available) { "" } else { " [即将推出]" }
+        $color  = if ($available) { "White" } else { "DarkGray" }
+        Write-Host ("  │  [{0}] {1,-8} {2}{3}" -f $m.Key, $m.Label, $m.Desc, $status).PadRight(52) + "│" -ForegroundColor $color
+    }
+
+    Write-Host "  │                                                  │" -ForegroundColor Cyan
+    Write-Host "  │  ── 网络 ────────────────────────────────────── │" -ForegroundColor DarkGray
+
+    $netModes = @(
+        @{ Key="6"; Label="LAN 诊断"; Desc="本机网络/防火墙/跨设备连接";      Mod="mode-lan.ps1" }
+    )
+    foreach ($m in $netModes) {
+        $available = $LoadedModes[$m.Mod]
+        $status = if ($available) { "" } else { " [即将推出]" }
+        $color  = if ($available) { "White" } else { "DarkGray" }
+        Write-Host ("  │  [{0}] {1,-8} {2}{3}" -f $m.Key, $m.Label, $m.Desc, $status).PadRight(52) + "│" -ForegroundColor $color
+    }
+
+    Write-Host "  │                                                  │" -ForegroundColor Cyan
+    Write-Host "  │  [0] 完整诊断     (快速诊断 + 深度诊断)         │" -ForegroundColor White
     Write-Host "  │  [Q] 退出                                       │" -ForegroundColor White
     Write-Host "  └──────────────────────────────────────────────────┘" -ForegroundColor Cyan
     Write-Host ""
@@ -228,15 +262,12 @@ if ($Mode -ne "menu") {
         $choice = (Read-Host "  请选择功能 [0-8/A/R/Q]").ToLower().Trim()
         $menuMap = @{
             "1" = "health"
-            "2" = "auth"
-            "2l" = "relogin"
+            "2" = "relogin"
             "3" = "cache"
             "4" = "network"
             "5" = "settings"
             "6" = "lan"
             "7" = "recovery"
-            "8" = "peer-check"
-            "r" = "recovery"
         }
 
         if ($choice -eq "a") {

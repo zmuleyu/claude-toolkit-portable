@@ -1,4 +1,4 @@
-# mode-network.ps1 - Mode 4: Network Diagnostics & Repair
+﻿# mode-network.ps1 - Mode 4: Network Diagnostics & Repair
 # Part of Claude Code Diagnostic & Repair Toolkit v4.0
 
 function Invoke-NetworkDiagnostics {

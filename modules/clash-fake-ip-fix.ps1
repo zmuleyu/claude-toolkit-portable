@@ -1,4 +1,4 @@
-# clash-fake-ip-fix.ps1 - Anthropic fake-ip-filter detect/patch/restart
+﻿# clash-fake-ip-fix.ps1 - Anthropic fake-ip-filter detect/patch/restart
 # Part of Claude Code Diagnostic & Repair Toolkit v5+
 #
 # Purpose: keep claude.ai / api.anthropic.com / *.anthropic.com / *.claude.ai

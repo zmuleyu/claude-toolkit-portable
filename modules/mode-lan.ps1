@@ -1,6 +1,107 @@
 ﻿# mode-lan.ps1 — Mode 6: LAN Diagnostics & Cross-Device Connectivity
-# Part of Claude Code Diagnostic & Repair Toolkit v6.0
-# Mirrors lan-toolkit MCP diagnose pipeline in pure PowerShell
+# Part of Claude Code Diagnostic & Repair Toolkit v7.5
+# Includes peer-check functionality (consolidated from mode-peer-check.ps1 in v7.5)
+
+# ── Shared helpers for peer scanning ─────────────────────────
+
+function Test-TcpPort {
+    param([string]$Ip, [int]$Port, [int]$TimeoutMs = 2000)
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    try {
+        $result = $tcp.BeginConnect($Ip, $Port, $null, $null)
+        $wait = $result.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+        if ($wait -and $tcp.Connected) { return $true }
+        return $false
+    } catch { return $false }
+    finally { $tcp.Close() }
+}
+
+function Invoke-PingTest {
+    param([string]$Ip)
+    try {
+        $ping = New-Object System.Net.NetworkInformation.Ping
+        $reply = $ping.Send($Ip, 2000)
+        return [pscustomobject]@{
+            Success   = ($reply.Status -eq "Success")
+            RoundTrip = $reply.RoundtripTime
+            Status    = $reply.Status.ToString()
+        }
+    } catch {
+        return [pscustomobject]@{ Success = $false; RoundTrip = -1; Status = $_.ToString() }
+    }
+}
+
+function Get-PeersConfig {
+    $toolkitRoot = Split-Path -Parent $PSScriptRoot
+    $peersFile   = Join-Path $toolkitRoot "config\peers.json"
+
+    if (Test-Path $peersFile) {
+        try {
+            return (Get-Content $peersFile -Raw | ConvertFrom-Json)
+        } catch {
+            Write-Status "WARN" "peers.json 解析失败，使用默认配置"
+        }
+    }
+    return $null
+}
+
+function Invoke-PeerScan {
+    # Scan all peers from the loaded config object
+    param($PeersConfig)
+    $peers = $PeersConfig.peers
+    foreach ($peerName in ($peers.PSObject.Properties.Name)) {
+        $peer  = $peers.$peerName
+        $ip    = $peer.ip
+        $label = if ($peer.PSObject.Properties["label"]) { $peer.label } else { $peerName }
+
+        Write-Host ""
+        Write-Host "  ── Peer: $label ($ip) ───────────────────────────" -ForegroundColor Cyan
+
+        $pingResult = Invoke-PingTest $ip
+        if ($pingResult.Success) {
+            Write-Status "OK"   "Ping $ip : 成功 ($($pingResult.RoundTrip) ms)"
+        } else {
+            Write-Status "FAIL" "Ping $ip : 失败 ($($pingResult.Status))"
+        }
+
+        $openCount  = 0
+        $portResults = @()
+        foreach ($portDef in $peer.ports) {
+            $portNum   = if ($portDef -is [int]) { $portDef } else { [int]$portDef.port }
+            $portLabel = if ($portDef -is [hashtable] -or ($portDef.PSObject.Properties["label"])) { $portDef.label } else { "port $portNum" }
+            $open = Test-TcpPort -Ip $ip -Port $portNum -TimeoutMs 2000
+            if ($open) { $openCount++ }
+            $portResults += [pscustomobject]@{ Port = $portNum; Label = $portLabel; Open = $open }
+        }
+
+        Write-Host ""
+        Write-Host ("  {0,-6} {1,-28} {2}" -f "端口", "用途", "状态") -ForegroundColor DarkGray
+        Write-Host ("  {0}" -f ("-" * 48)) -ForegroundColor DarkGray
+        foreach ($r in $portResults) {
+            $statusTxt = if ($r.Open) { "OPEN  ✔" } else { "closed" }
+            $color     = if ($r.Open) { "Green" } else { "DarkGray" }
+            Write-Host ("  {0,-6} {1,-28} {2}" -f $r.Port, $r.Label, $statusTxt) -ForegroundColor $color
+        }
+
+        Write-Host ""
+        if ($openCount -eq 0 -and -not $pingResult.Success) {
+            Write-Host "  ── 根因诊断 ─────────────────────────────────────" -ForegroundColor Yellow
+            Write-Host "  Ping 不通 + 所有端口关闭。可能原因:" -ForegroundColor Yellow
+            Write-Host "    1. $ip 目标机器已关机或不在线" -ForegroundColor White
+            Write-Host "    2. 本机 / 对端防火墙拦截 ICMP + TCP" -ForegroundColor White
+            Write-Host "    3. 两机不在同一子网或 VLAN" -ForegroundColor White
+            Write-Host "    4. Clash TUN 代理了所有流量（包括 LAN）" -ForegroundColor White
+        } elseif ($openCount -eq 0 -and $pingResult.Success) {
+            Write-Host "  ── 根因诊断 ─────────────────────────────────────" -ForegroundColor Yellow
+            Write-Host "  Ping 通但所有服务端口关闭。最可能原因:" -ForegroundColor Yellow
+            Write-Host "    1. [高概率] 目标机器服务未启动 (lan-toolkit/SSH/RDP)" -ForegroundColor White
+            Write-Host "    2. [高概率] 目标机器 Windows 防火墙拦截入站连接" -ForegroundColor White
+            Write-Host "    3. [低概率] 本机出站被 Clash TUN 规则重定向" -ForegroundColor White
+        } else {
+            Write-Status "OK" "$openCount / $($portResults.Count) 个端口可达"
+        }
+    }
+}
 
 function Invoke-LanDiagnostics {
 
@@ -220,58 +321,60 @@ function Invoke-LanDiagnostics {
         Add-LanResult "Firewall" "PASS" "无阻止规则"
     }
 
-    # ── 5/7. Target Connectivity ─────────────────────────────
+    # ── 5/7. Target Connectivity (peers.json or manual) ─────────
     Write-Section "目标设备连接测试" "[5/7]"
 
-    $targetIP = $null
-    $resp = Read-Host "      输入目标 IP (留空跳过)"
-    if ($resp -and $resp -match "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") {
-        $targetIP = $resp.Trim()
-    }
+    $peersConfig = Get-PeersConfig
+    if ($peersConfig) {
+        Write-Status "INFO" "检测到 config\peers.json — 扫描预配置对端"
+        Write-Status "INFO" "提示: 如需修改对端配置，编辑 config\peers.json"
+        Invoke-PeerScan -PeersConfig $peersConfig
+        Add-LanResult "Target Connect" "PASS" "peers.json 扫描完成"
+    } else {
+        Write-Status "INFO" "未找到 config\peers.json — 手动输入目标 IP"
+        Write-Status "INFO" "提示: 复制 config\peers.example.json -> config\peers.json 可固化对端配置"
+        $targetIP = $null
+        $resp = Read-Host "      输入目标 IP (留空跳过)"
+        if ($resp -and $resp -match "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") {
+            $targetIP = $resp.Trim()
+        }
 
-    if ($targetIP) {
-        # Subnet check
-        if ($primaryLanIP) {
-            $localSubnet = ($primaryLanIP -split '\.')[0..2] -join '.'
-            $targetSubnet = ($targetIP -split '\.')[0..2] -join '.'
-            if ($localSubnet -ne $targetSubnet) {
-                Write-Status "WARN" "子网不匹配: 本机 $localSubnet.x vs 目标 $targetSubnet.x"
-            } else {
-                Write-Status "OK" "同一子网: ${localSubnet}.0/24"
+        if ($targetIP) {
+            # Subnet check
+            if ($primaryLanIP) {
+                $localSubnet  = ($primaryLanIP -split '\.')[0..2] -join '.'
+                $targetSubnet = ($targetIP -split '\.')[0..2] -join '.'
+                if ($localSubnet -ne $targetSubnet) {
+                    Write-Status "WARN" "子网不匹配: 本机 $localSubnet.x vs 目标 $targetSubnet.x"
+                } else {
+                    Write-Status "OK" "同一子网: ${localSubnet}.0/24"
+                }
             }
-        }
 
-        # ICMP ping
-        Write-Status "INFO" "Ping $targetIP ..."
-        try {
-            $pingResult = Test-Connection $targetIP -Count 2 -ErrorAction Stop
-            $avgMs = ($pingResult | Measure-Object -Property ResponseTime -Average).Average
-            Write-Status "OK" "Ping 成功: 平均 ${avgMs}ms"
-        } catch {
-            Write-Status "ERROR" "Ping 失败: $_"
-        }
-
-        # TCP probe on common ports
-        $testPorts = @(8789, 18850, 19000, 3000, 5173, 8080)
-        Write-Status "INFO" "TCP 端口探测: $($testPorts -join ', ')"
-
-        foreach ($port in $testPorts) {
+            # ICMP ping
+            Write-Status "INFO" "Ping $targetIP ..."
             try {
-                $tc = New-Object System.Net.Sockets.TcpClient
-                $ar = $tc.BeginConnect($targetIP, $port, $null, $null)
-                $ok = $ar.AsyncWaitHandle.WaitOne(1000, $false)
-                if ($ok -and $tc.Connected) {
-                    $tc.EndConnect($ar)
+                $pingResult2 = Test-Connection $targetIP -Count 2 -ErrorAction Stop
+                $avgMs = ($pingResult2 | Measure-Object -Property ResponseTime -Average).Average
+                Write-Status "OK" "Ping 成功: 平均 ${avgMs}ms"
+            } catch {
+                Write-Status "ERROR" "Ping 失败: $_"
+            }
+
+            # TCP probe on common ports
+            $testPorts = @(8789, 18850, 19000, 3000, 5173, 8080)
+            Write-Status "INFO" "TCP 端口探测: $($testPorts -join ', ')"
+            foreach ($port in $testPorts) {
+                if (Test-TcpPort -Ip $targetIP -Port $port -TimeoutMs 1000) {
                     Write-Status "OK" "  :$port 开放"
                 }
-                $tc.Close()
-            } catch { }
-        }
+            }
 
-        Add-LanResult "Target Connect" "PASS" $targetIP
-    } else {
-        Write-Status "SKIP" "跳过目标设备测试"
-        Add-LanResult "Target Connect" "INFO" "已跳过"
+            Add-LanResult "Target Connect" "PASS" $targetIP
+        } else {
+            Write-Status "SKIP" "跳过目标设备测试"
+            Add-LanResult "Target Connect" "INFO" "已跳过"
+        }
     }
 
     # ── 6/7. Service Discovery (ARP) ─────────────────────────
