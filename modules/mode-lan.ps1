@@ -387,10 +387,14 @@ function Invoke-LanDiagnostics {
 
         foreach ($arpLine in $arpOutput -split "`n") {
             $arpPattern = "($subnet\.\d+)\s+"
-            if ($arpLine -match $arpPattern -and ($arpLine -match 'dynamic' -or $arpLine -match '动态')) {
-                $peerIP = $Matches[1].Trim()
-                if ($peerIP -ne $primaryLanIP -and -not $peerIP.EndsWith(".255")) {
-                    $arpPeers += $peerIP
+            # Save $Matches[1] immediately — subsequent -match calls overwrite $Matches
+            if ($arpLine -match $arpPattern) {
+                $capturedIP = $Matches[1]
+                if (($arpLine -match 'dynamic' -or $arpLine -match '动态') -and $capturedIP) {
+                    $peerIP = $capturedIP.Trim()
+                    if ($peerIP -ne $primaryLanIP -and -not $peerIP.EndsWith(".255")) {
+                        $arpPeers += $peerIP
+                    }
                 }
             }
         }
