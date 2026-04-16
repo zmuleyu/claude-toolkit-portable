@@ -232,6 +232,19 @@ function Invoke-Mode {
 }
 
 # ── Entry point ───────────────────────────────────────────────
+
+# Handle -ShowCurrentAccount shortcut (read-only, no menu)
+# NOTE: Must be placed after all function definitions so Show-Banner is available
+if ($ShowCurrentAccount.IsPresent) {
+    Show-Banner
+    if ($LoadedModes["mode-auth.ps1"]) {
+        Show-CurrentAccount
+    } else {
+        Write-Host "  [!!] mode-auth.ps1 未加载，无法读取账号信息" -ForegroundColor Red
+    }
+    exit 0
+}
+
 Show-Banner
 
 if ($Mode -ne "menu") {
